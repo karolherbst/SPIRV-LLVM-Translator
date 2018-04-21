@@ -722,7 +722,8 @@ SPIRVValue *LLVMToSPIRV::transValueWithoutDecoration(Value *V,
     // Though variables with common linkage type are initialized by 0,
     // they can be represented in SPIR-V as uninitialized variables with
     // 'Export' linkage type, just as tentative definitions look in C
-    llvm::Value *Init = GV->hasInitializer() && !GV->hasCommonLinkage()
+    llvm::Value *Init = GV->hasInitializer() && !GV->hasCommonLinkage() &&
+                                !isa<UndefValue>(GV->getInitializer())
                             ? GV->getInitializer()
                             : nullptr;
     StructType *ST = Init ? dyn_cast<StructType>(Init->getType()) : nullptr;
