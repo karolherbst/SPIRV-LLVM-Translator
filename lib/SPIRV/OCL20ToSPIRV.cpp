@@ -1234,7 +1234,7 @@ void OCL20ToSPIRV::transWorkItemBuiltinsToVariables() {
         IsVec ? VectorType::get(I.getReturnType(), 3) : I.getReturnType();
     auto BV = new GlobalVariable(
         *M, GVType, true, GlobalValue::ExternalLinkage, nullptr, BuiltinVarName,
-        0, GlobalVariable::NotThreadLocal, SPIRAS_Constant);
+        0, GlobalVariable::NotThreadLocal, SPIRAS_Input);
     std::vector<Instruction *> InstList;
     for (auto UI = I.user_begin(), UE = I.user_end(); UI != UE; ++UI) {
       auto CI = dyn_cast<CallInst>(*UI);
