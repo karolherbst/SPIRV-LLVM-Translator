@@ -57,6 +57,8 @@
 #include "SPIRVUtil.h"
 #include "SPIRVValue.h"
 
+#include "llvm/Analysis/LoopInfo.h"
+#include "llvm/IR/Dominators.h"
 #include "llvm/IR/IntrinsicInst.h"
 
 #include <memory>
@@ -79,6 +81,8 @@ public:
 
   void getAnalysisUsage(AnalysisUsage &AU) const override {
     AU.addRequired<OCLTypeToSPIRV>();
+    AU.addRequired<DominatorTreeWrapperPass>();
+    AU.addRequired<LoopInfoWrapperPass>();
   }
 
   static char ID;
@@ -178,6 +182,7 @@ private:
   SPIRVId addInt32(int);
   void transFunction(Function *I);
   SPIRV::SPIRVLinkageTypeKind transLinkageType(const GlobalValue *GV);
+  void handleBranchMerge(BranchInst *Branch, SPIRVBasicBlock *BB);
 };
 
 } // namespace SPIRV

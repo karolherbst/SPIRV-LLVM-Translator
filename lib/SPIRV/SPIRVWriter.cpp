@@ -77,6 +77,7 @@
 #include "llvm/Support/ToolOutputFile.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/IPO.h"
+#include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Utils.h" // loop-simplify pass
 
 #include <cstdlib>
@@ -698,6 +699,80 @@ SPIRV::SPIRVInstruction *LLVMToSPIRV::transUnaryInst(UnaryInstruction *U,
                           BB);
 }
 
+void
+LLVMToSPIRV::handleBranchMerge(BranchInst *Branch, SPIRVBasicBlock *BB)
+{
+  // Check whether basic block, which has this branch instruction, is loop
+  // header or not. If it is loop header, generate OpLoopMerge and
+  // OpBranchConditional.
+  Function *Func = Branch->getParent()->getParent();
+  DominatorTree &DT =
+      getAnalysis<DominatorTreeWrapperPass>(*Func).getDomTree();
+  const LoopInfo &LI =
+      getAnalysis<LoopInfoWrapperPass>(*Func).getLoopInfo();
+
+  BasicBlock *BranchBB = Branch->getParent();
+  if (LI.isLoopHeader(BranchBB)) {
+    Value *ContinueBB = nullptr;
+    Value *MergeBB = nullptr;
+
+    Loop *L = LI.getLoopFor(BranchBB);
+    MergeBB = L->getExitBlock();
+
+    if (!MergeBB) {
+      // StructurizeCFG pass converts CFG into triangle shape and the cfg
+      // has regions with single entry/exit. As a result, loop should not
+      // have multiple exits.
+      llvm_unreachable("Loop has multiple exits???");
+    }
+
+    if (L->isLoopLatch(BranchBB)) {
+      ContinueBB = BranchBB;
+    } else {
+      // From SPIR-V spec 2.11, Continue Target must dominate that back-edge
+      // block.
+      BasicBlock *Header = L->getHeader();
+      BasicBlock *Latch = L->getLoopLatch();
+
+      for (BasicBlock *BB : L->blocks()) {
+        if (BB == Header) {
+          continue;
+        }
+
+        // Check whether block dominates block with back-edge.
+        if (DT.dominates(BB, Latch)) {
+          ContinueBB = BB;
+        }
+      }
+
+      if (!ContinueBB) {
+        llvm_unreachable("Wrong continue block from loop");
+      }
+    }
+
+    //
+    // Generate OpLoopMerge.
+    //
+    SPIRVBasicBlock *Merge = static_cast<SPIRVBasicBlock *>(transValue(MergeBB, BB, false));
+    SPIRVBasicBlock *Continue = static_cast<SPIRVBasicBlock *>(transValue(ContinueBB, BB, false));
+
+    std::vector<SPIRVWord> Parameters;
+    spv::LoopControlMask LoopControl = getLoopControl(Branch, Parameters);
+
+    BM->addLoopMergeInst(Merge->getId(), Continue->getId(), 0, Parameters, BB);
+
+  } else if (Branch->isConditional()) {
+    // StructurizeCFG pass already manipulated CFG. Just use false block
+    // of branch instruction as merge block.
+    BasicBlock *MergeBB = Branch->getSuccessor(1);
+
+    //
+    // Generate OpSelectionMerge.
+    //
+    SPIRVBasicBlock *Merge = static_cast<SPIRVBasicBlock *>(transValue(MergeBB, BB, false));
+    BM->addSelectionMergeInst(Merge->getId(), 0, BB);
+  }
+}
 /// An instruction may use an instruction from another BB which has not been
 /// translated. SPIRVForward should be created as place holder for these
 /// instructions and replaced later by the real instructions.
@@ -706,8 +781,15 @@ SPIRVValue *LLVMToSPIRV::transValueWithoutDecoration(Value *V,
                                                      SPIRVBasicBlock *BB,
                                                      bool CreateForward) {
   if (auto LBB = dyn_cast<BasicBlock>(V)) {
+    Function *F = LBB->getParent();
+
+    // Translate first BB's which dominate this block:
+    DominatorTree &DT = getAnalysis<DominatorTreeWrapperPass>(*F).getDomTree();
+    for (auto &B : *F)
+      if ((&B != LBB) && DT.dominates(&B, LBB))
+        transValue(&B, nullptr);
     auto BF =
-        static_cast<SPIRVFunction *>(getTranslatedValue(LBB->getParent()));
+        static_cast<SPIRVFunction *>(getTranslatedValue(F));
     assert(BF && "Function not translated");
     BB = static_cast<SPIRVBasicBlock *>(mapValue(V, BM->addBasicBlock(BF)));
     BM->setName(BB, LBB->getName());
@@ -861,6 +943,7 @@ SPIRVValue *LLVMToSPIRV::transValueWithoutDecoration(Value *V,
   }
 
   if (BranchInst *Branch = dyn_cast<BranchInst>(V)) {
+    handleBranchMerge(Branch, BB);
     SPIRVLabel *SuccessorTrue =
         static_cast<SPIRVLabel *>(transValue(Branch->getSuccessor(0), BB));
 
@@ -1678,6 +1761,7 @@ void addPassesForSPIRV(legacy::PassManager &PassMgr) {
   PassMgr.add(createSPIRVLowerConstExpr());
   PassMgr.add(createSPIRVLowerBool());
   PassMgr.add(createSPIRVLowerMemmove());
+  PassMgr.add(createStructurizeCFGPass(false));
 }
 
 bool llvm::writeSpirv(Module *M, llvm::raw_ostream &OS, std::string &ErrMsg) {
