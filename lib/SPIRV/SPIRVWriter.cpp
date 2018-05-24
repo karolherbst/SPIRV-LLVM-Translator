@@ -223,6 +223,7 @@ private:
   LLVMToSPIRVDbgTran DbgTran;
 
   SPIRVType *mapType(Type *T, SPIRVType *BT) {
+    assert(!TypeMap[T] || TypeMap[T] == BT);
     TypeMap[T] = BT;
     SPIRVDBG(dbgs() << "[mapType] " << *T << " => "; spvdbgs() << *BT << '\n');
     return BT;
