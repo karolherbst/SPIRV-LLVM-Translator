@@ -1457,8 +1457,8 @@ spv_ostream &operator<<(spv_ostream &O, SPIRVModule &M) {
         IsEntryPoint = true;
         break;
       }
-    if (!IsEntryPoint)
-      M.getEntry(I)->encodeName(O);
+//    if (!IsEntryPoint)
+//      M.getEntry(I)->encodeName(O);
   }
 
   O << MI.MemberNameVec << MI.DecGroupVec << MI.DecorateSet << MI.GroupDecVec
