@@ -331,7 +331,7 @@ bool LLVMToSPIRV::isBuiltinTransToExtInst(Function *F,
   std::string DemangledName;
   if (!oclIsBuiltin(OrigName, &DemangledName))
     return false;
-  DEBUG(dbgs() << "[oclIsBuiltinTransToExtInst] CallInst: demangled name: "
+  LLVM_DEBUG(dbgs() << "[oclIsBuiltinTransToExtInst] CallInst: demangled name: "
                << DemangledName << '\n');
   StringRef S = DemangledName;
   if (!S.startswith(kSPIRVName::Prefix))
