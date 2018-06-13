@@ -41,6 +41,7 @@ add_llvm_library(LLVMSPIRVLib
     Analysis
     BitWriter
     Core
+    ScalarOpts
     Support
     TransformUtils
   DEPENDS
