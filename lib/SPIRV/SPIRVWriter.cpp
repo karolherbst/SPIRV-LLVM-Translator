@@ -79,6 +79,7 @@
 #include "llvm/Transforms/IPO.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Utils.h" // loop-simplify pass
+#include "llvm/Transforms/Utils/BasicBlockUtils.h"
 
 #include <cstdlib>
 #include <functional>
@@ -97,6 +98,7 @@ using namespace OCLUtil;
 
 namespace llvm {
 FunctionPass *createPromoteMemoryToRegisterPass();
+void initializePostStructurizeMESAPass(llvm::PassRegistry&);
 } // namespace llvm
 
 namespace SPIRV {
@@ -762,15 +764,25 @@ LLVMToSPIRV::handleBranchMerge(BranchInst *Branch, SPIRVBasicBlock *BB)
     BM->addLoopMergeInst(Merge->getId(), Continue->getId(), 0, Parameters, BB);
 
   } else if (Branch->isConditional()) {
-    // StructurizeCFG pass already manipulated CFG. Just use false block
-    // of branch instruction as merge block.
-    BasicBlock *MergeBB = Branch->getSuccessor(1);
+    bool HasBackEdge = false;
 
-    //
-    // Generate OpSelectionMerge.
-    //
-    SPIRVBasicBlock *Merge = static_cast<SPIRVBasicBlock *>(transValue(MergeBB, BB, false));
-    BM->addSelectionMergeInst(Merge->getId(), 0, BB);
+    for (auto i = 0u; i < Branch->getNumSuccessors(); i++) {
+      if (LI.isLoopHeader(Branch->getSuccessor(i))) {
+        HasBackEdge = true;
+      }
+    }
+
+    if (!HasBackEdge) {
+      // StructurizeCFG pass already manipulated CFG. Just use false block
+      // of branch instruction as merge block.
+      BasicBlock *MergeBB = Branch->getSuccessor(1);
+
+      //
+      // Generate OpSelectionMerge.
+      //
+      SPIRVBasicBlock *Merge = static_cast<SPIRVBasicBlock *>(transValue(MergeBB, BB, false));
+      BM->addSelectionMergeInst(Merge->getId(), 0, BB);
+    }
   }
 }
 /// An instruction may use an instruction from another BB which has not been
@@ -1748,6 +1760,51 @@ ModulePass *llvm::createLLVMToSPIRV(SPIRVModule *SMod) {
   return new LLVMToSPIRV(SMod);
 }
 
+class PostStructurizeMESA : public FunctionPass {
+public:
+  static char ID;
+
+  explicit PostStructurizeMESA()
+      : FunctionPass(ID) {
+    initializePostStructurizeMESAPass(*PassRegistry::getPassRegistry());
+  }
+
+  void getAnalysisUsage(AnalysisUsage &AU) const override {
+    AU.addRequired<DominatorTreeWrapperPass>();
+    AU.addRequired<LoopInfoWrapperPass>();
+    FunctionPass::getAnalysisUsage(AU);
+  }
+
+  bool runOnFunction(Function &F) override {
+    DominatorTree &DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
+    LoopInfo &LI = getAnalysis<LoopInfoWrapperPass>().getLoopInfo();
+    for (auto *L : LI.getLoopsInPreorder()) {
+      auto *HeadBlock = L->getHeader();
+      SmallVector<BasicBlock *, 4> LoopPreds;
+
+      for (BasicBlock *Pred : predecessors(HeadBlock))
+        if (!L->contains(Pred))
+          LoopPreds.push_back(Pred);
+
+      SplitBlockPredecessors(HeadBlock, LoopPreds, "", &DT, &LI, nullptr, true);
+    }
+    return true;
+  }
+};
+
+char PostStructurizeMESA::ID = 0;
+
+INITIALIZE_PASS_BEGIN(PostStructurizeMESA, "poststructurizemesa", "Legalize the CFG with Mesa",
+                      false, false)
+INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(LoopInfoWrapperPass)
+INITIALIZE_PASS_END(PostStructurizeMESA, "poststructurizemesa", "Legalize the CFG with Mesa",
+                    false, false)
+
+FunctionPass * createPostStructurizeMESAPass() {
+  return new PostStructurizeMESA();
+}
+
 void addPassesForSPIRV(legacy::PassManager &PassMgr) {
   if (SPIRVMemToReg)
     PassMgr.add(createPromoteMemoryToRegisterPass());
@@ -1762,6 +1819,7 @@ void addPassesForSPIRV(legacy::PassManager &PassMgr) {
   PassMgr.add(createSPIRVLowerBool());
   PassMgr.add(createSPIRVLowerMemmove());
   PassMgr.add(createStructurizeCFGPass(false));
+  PassMgr.add(createPostStructurizeMESAPass());
 }
 
 bool llvm::writeSpirv(Module *M, llvm::raw_ostream &OS, std::string &ErrMsg) {
