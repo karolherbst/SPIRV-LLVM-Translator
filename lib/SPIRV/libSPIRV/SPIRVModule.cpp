@@ -1208,10 +1208,22 @@ SPIRVInstruction *SPIRVModuleImpl::addSelectionMergeInst(
 SPIRVInstruction *SPIRVModuleImpl::addLoopMergeInst(
     SPIRVId MergeBlock, SPIRVId ContinueTarget, SPIRVWord LoopControl,
     std::vector<SPIRVWord> LoopControlParameters, SPIRVBasicBlock *BB) {
+  SPIRVInstruction *insertBefore =
+    const_cast<SPIRVInstruction *>(BB->getTerminateInstr());
+
+  switch (insertBefore->getOpCode()) {
+  case OpBranchConditional:
+  case OpBranch:
+    break;
+  default:
+    insertBefore = nullptr;
+    break;
+  }
+
   return addInstruction(
       new SPIRVLoopMerge(MergeBlock, ContinueTarget, LoopControl,
                          LoopControlParameters, BB),
-      BB, const_cast<SPIRVInstruction *>(BB->getTerminateInstr()));
+      BB, insertBefore);
 }
 
 SPIRVInstruction *
