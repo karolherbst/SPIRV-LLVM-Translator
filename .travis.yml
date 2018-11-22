@@ -13,6 +13,8 @@ git:
 branches:
   only:
     - master
+    - travis
+    - travis-test
 
 addons:
   apt:
