@@ -1792,6 +1792,12 @@ LLVMToSPIRVBase::transValueWithoutDecoration(Value *V, SPIRVBasicBlock *BB,
   }
 
   if (auto GV = dyn_cast<GlobalVariable>(V)) {
+    auto AddressSpace = static_cast<SPIRAddressSpace>(GV->getAddressSpace());
+    // We can't emit private variables globally, we need to create copies of each value inside each
+    // function
+    if (AddressSpace == SPIRAS_Private && !BB)
+      return nullptr;
+
     llvm::Type *Ty = GV->getValueType();
     // Though variables with common linkage type are initialized by 0,
     // they can be represented in SPIR-V as uninitialized variables with
@@ -1852,7 +1858,6 @@ LLVMToSPIRVBase::transValueWithoutDecoration(Value *V, SPIRVBasicBlock *BB,
     }
 
     SPIRVStorageClassKind StorageClass;
-    auto AddressSpace = static_cast<SPIRAddressSpace>(GV->getAddressSpace());
     bool IsVectorCompute =
         BM->isAllowedToUseExtension(ExtensionID::SPV_INTEL_vector_compute) &&
         GV->hasAttribute(kVCMetadata::VCGlobalVariable);
@@ -1872,10 +1877,14 @@ LLVMToSPIRVBase::transValueWithoutDecoration(Value *V, SPIRVBasicBlock *BB,
       StorageClass = SPIRSPIRVAddrSpaceMap::map(AddressSpace);
     }
 
-    SPIRVType *TranslatedTy = transPointerType(Ty, GV->getAddressSpace());
+    SPIRVType *TranslatedTy = transPointerType(Ty, static_cast<unsigned int>(AddressSpace));
+
+    SPIRVBasicBlock *VarBB = nullptr;
+    if (StorageClass == StorageClassFunction)
+      VarBB = BB;
     auto BVar = static_cast<SPIRVVariable *>(
         BM->addVariable(TranslatedTy, GV->isConstant(), transLinkageType(GV),
-                        BVarInit, GV->getName().str(), StorageClass, nullptr));
+                        BVarInit, GV->getName().str(), StorageClass, VarBB));
 
     if (IsVectorCompute) {
       BVar->addDecorate(DecorationVectorComputeVariableINTEL);
@@ -3946,12 +3955,12 @@ SPIRVValue *LLVMToSPIRVBase::transIntrinsicInst(IntrinsicInst *II,
       std::vector<SPIRVValue *> Elts(TNumElts, transValue(Val, BB));
       Init = BM->addCompositeConstant(CompositeTy, Elts);
     }
-    SPIRVType *VarTy = transPointerType(AT, SPIRV::SPIRAS_Constant);
+    SPIRVType *VarTy = transPointerType(AT, SPIRV::SPIRAS_Private);
     SPIRVValue *Var = BM->addVariable(VarTy, /*isConstant*/ true,
                                       spv::internal::LinkageTypeInternal, Init,
-                                      "", StorageClassUniformConstant, nullptr);
+                                      "", StorageClassFunction, BB->getParent()->getBasicBlock(0));
     SPIRVType *SourceTy =
-        transPointerType(Val->getType(), SPIRV::SPIRAS_Constant);
+        transPointerType(Val->getType(), SPIRV::SPIRAS_Private);
     SPIRVValue *Source = BM->addUnaryInst(OpBitcast, SourceTy, Var, BB);
     SPIRVValue *Target = transValue(MSI->getRawDest(), BB);
     return BM->addCopyMemorySizedInst(Target, Source, CompositeTy->getLength(),
@@ -4544,8 +4553,8 @@ bool LLVMToSPIRVBase::transGlobalVariables() {
       continue;
     } else if (MDNode *IO = ((*I).getMetadata("io_pipe_id")))
       transGlobalIOPipeStorage(&(*I), IO);
-    else if (!transValue(&(*I), nullptr))
-      return false;
+    else
+      transValue(&(*I), nullptr);
   }
   return true;
 }
@@ -4587,6 +4596,8 @@ LLVMToSPIRVBase::collectEntryPointInterfaces(SPIRVFunction *SF, Function *F) {
   std::vector<SPIRVId> Interface;
   for (auto &GV : M->globals()) {
     const auto AS = GV.getAddressSpace();
+    if (AS == SPIRAS_Private)
+      continue;
     SPIRVModule *BM = SF->getModule();
     if (!BM->isAllowedToUseVersion(VersionNumber::SPIRV_1_4))
       if (AS != SPIRAS_Input && AS != SPIRAS_Output)

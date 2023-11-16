@@ -1683,7 +1683,7 @@ SPIRVInstruction *SPIRVModuleImpl::addVariable(
   SPIRVVariable *Variable = new SPIRVVariable(Type, getId(), Initializer, Name,
                                               StorageClass, BB, this);
   if (BB)
-    return addInstruction(Variable, BB);
+    return addInstruction(Variable, BB, BB->getNumInst() ? BB->getInst(0) : nullptr);
 
   add(Variable);
   if (LinkageTy != internal::LinkageTypeInternal)
